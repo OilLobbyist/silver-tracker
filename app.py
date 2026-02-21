@@ -87,9 +87,21 @@ if not edited_df.empty and edited_df["Weight (oz)"].sum() > 0:
         st.write(f"📦 **Volume:** Your stack takes up about **{volume:,.1f} cubic centimeters**.")
         st.write(f"🛡️ **Reflectivity:** Your stack reflects **95%** of all light, the highest of any metal!")
 
-    # Detailed Table View
+    # Detailed Table View (append a totals/footer row for display only)
     st.write("### 🔍 Detailed Item Breakdown")
-    st.dataframe(edited_df, use_container_width=True)
+    display_df = edited_df.copy()
+    totals_row = {
+        "Description": "TOTAL",
+        "Weight (oz)": total_oz,
+        "Date Acquired": "",
+        "Price Paid ($)": total_paid,
+        "Modifier ($)": "",
+        "Item Melt Value ($)": total_melt,
+    }
+    # Ensure we only add keys that exist in the current frame (keeps compatibility)
+    totals_row = {k: v for k, v in totals_row.items() if k in display_df.columns}
+    display_df = pd.concat([display_df, pd.DataFrame([totals_row])], ignore_index=True)
+    st.dataframe(display_df, use_container_width=True)
 
     # --- 8. SAVE BUTTON ---
     csv = edited_df.to_csv(index=False).encode('utf-8')
