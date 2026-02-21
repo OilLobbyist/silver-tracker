@@ -45,8 +45,34 @@ def get_silver_price():
             return FALLBACK_SPOT
         return float(price)
     except RequestException as e:
-        logging.exception("Failed to fetch silver price: %s", e)
+        # Avoid noisy stack traces for expected API failures (e.g., 403/invalid key)
+        logging.warning("Failed to fetch silver price (%s); using fallback price", e)
         return FALLBACK_SPOT
+
+
+def _normalize_inventory(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure columns have compatible dtypes for Streamlit's data_editor.
+
+    - Convert `Date Acquired` to `datetime.date` objects where possible.
+    - Coerce numeric columns to numeric dtypes (or NaN).
+    """
+    df = df.copy()
+    if df is None:
+        return pd.DataFrame()
+
+    if "Date Acquired" in df.columns:
+        try:
+            df["Date Acquired"] = pd.to_datetime(df["Date Acquired"], errors="coerce").dt.date
+        except Exception:
+            # leave as-is if conversion unexpectedly fails
+            pass
+
+    numeric_cols = ["Weight (troy oz)", "Weight (ozt)", "Price Paid ($)", "Modifier ($)"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df
 
 # Fetch the global spot price (cached)
 with st.spinner("Fetching spot price..."):
@@ -56,6 +82,26 @@ with st.spinner("Fetching spot price..."):
 st.title("🪙 Privately track your stack")
 
 st.caption("Track your silver inventory, calculate melt value, and see fun stats about your stack. Your data is stored locally in your browser for privacy.")
+
+# Quick guidance about saving/loading: CSV is the canonical saved file
+with st.expander("💾 How saving & loading works", expanded=False):
+    st.write(
+        "- Your stack is stored locally in the browser session while you work. To persist data across machines or sessions, export the CSV using the 'Download/Save Stack' button.\n"
+        "- To re-load, use the CSV uploader below. The CSV should include these columns: `Description`, `Weight (troy oz)`, `Date Acquired`, `Price Paid ($)`, `Modifier ($)`.\n"
+        "- `Date Acquired` should be an ISO-style date (YYYY-MM-DD) or blank. Numeric columns should contain numbers."
+    )
+
+    sample_df = pd.DataFrame([
+        {
+            "Description": "Example Round 1oz",
+            "Weight (troy oz)": 1.0,
+            "Date Acquired": date.today().isoformat(),
+            "Price Paid ($)": 25.00,
+            "Modifier ($)": 0.00,
+        }
+    ])
+    sample_csv = sample_df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download sample CSV", data=sample_csv, file_name="silver_stack_sample.csv", help="Download a sample CSV with the correct columns.")
 
 uploaded_file = st.file_uploader("📂 Import your saved stack (CSV)", type="csv")
 
@@ -70,21 +116,39 @@ if uploaded_file is not None:
         df = pd.DataFrame(columns=[
             "Description", "Weight (troy oz)", "Date Acquired", "Price Paid ($)", "Modifier ($)"
         ])
-    st.session_state.inventory = df
+    # Warn users if they uploaded a CSV that lacks expected columns
+    expected_cols = [
+        "Description",
+        "Weight (troy oz)",
+        "Date Acquired",
+        "Price Paid ($)",
+        "Modifier ($)",
+    ]
+    missing = [c for c in expected_cols if c not in df.columns]
+    if missing:
+        st.warning(
+            f"Uploaded CSV is missing expected columns: {', '.join(missing)}. "
+            "You can download the sample CSV in 'How saving & loading works' to get the correct format."
+        )
+
+    st.session_state.inventory = _normalize_inventory(df)
 else:
     if "inventory" not in st.session_state:
         st.session_state.inventory = pd.DataFrame(columns=[
             "Description", "Weight (troy oz)", "Date Acquired", "Price Paid ($)", "Modifier ($)"
         ])
 
+# Ensure any existing session inventory has compatible dtypes for the data_editor
+st.session_state.inventory = _normalize_inventory(st.session_state.inventory)
+
 # --- Add single-item entry form (privacy-preserving: stores only in browser session_state)
 with st.expander("➕ Add one item"):
     with st.form("add_item_form", clear_on_submit=True):
-        desc = st.text_input("Description")
-        weight = st.number_input("Weight (troy oz)", min_value=0.0, format="%.4f")
-        date_acq = st.date_input("Date Acquired")
-        price_paid = st.number_input("Price Paid ($)", min_value=0.0, format="%.2f")
-        modifier = st.number_input("Modifier ($)", format="%.2f")
+        desc = st.text_input("Description", placeholder="e.g., Generic Round 1oz")
+        weight = st.number_input("Weight (troy oz)", min_value=0.0, format="%.4f", help="Enter weight in troy ounces (e.g., 1.0000)")
+        date_acq = st.date_input("Date Acquired", help="Optional: date item was acquired. Leave blank if unknown.")
+        price_paid = st.number_input("Price Paid ($)", min_value=0.0, format="%.2f", help="Amount you paid for this item (optional).")
+        modifier = st.number_input("Modifier ($)", format="%.2f", help="Use for retailer fees or premiums applied to melt value.")
         add = st.form_submit_button("Add Item")
         if add:
             new_row = {
@@ -101,10 +165,11 @@ with st.expander("➕ Add one item"):
 
 # --- 5. DATA ENTRY TABLE ---
 st.subheader("🗂️ Your inventory")
+st.info("Tip: After editing here, use the 'Download/Save Stack' button below to export your CSV — that exported CSV is your saved file.")
 edited_df = st.data_editor(
     st.session_state.inventory,
     num_rows="dynamic",
-    use_container_width=True,
+    width='stretch',
     column_config={
         "Date Acquired": st.column_config.DateColumn(),
         "Weight (troy oz)": st.column_config.NumberColumn(format="%.2f"),
@@ -137,6 +202,10 @@ if not edited_df.empty:
     total_troy_oz = edited_df.get("Weight (troy oz)", pd.Series(dtype="float")).sum()
     if total_troy_oz <= 0:
         st.info("Add items with non-zero weight to see analytics.")
+        # Ensure downstream variables are defined so UI code can render safely
+        total_melt = 0.0
+        total_paid = 0.0
+        pl = 0.0
     else:
         # Calculate Melt Value for the item breakdown
         edited_df["Item Melt Value ($)"] = (edited_df["Weight (troy oz)"] * spot_price) + edited_df["Modifier ($)"].fillna(0)
@@ -181,7 +250,7 @@ if not edited_df.empty:
     display_df = edited_df.copy()
     totals_row = {
         "Description": "TOTAL",
-            "Weight (troy oz)": total_troy_oz,
+        "Weight (troy oz)": total_troy_oz,
         "Date Acquired": "",
         "Price Paid ($)": total_paid,
         "Modifier ($)": "",
@@ -190,7 +259,30 @@ if not edited_df.empty:
     # Ensure we only add keys that exist in the current frame (keeps compatibility)
     totals_row = {k: v for k, v in totals_row.items() if k in display_df.columns}
     display_df = pd.concat([display_df, pd.DataFrame([totals_row])], ignore_index=True)
-    st.dataframe(display_df, use_container_width=True)
+
+    # Format numbers and style the TOTAL row to make it look like a proper footer
+    fmt = {}
+    if "Weight (troy oz)" in display_df.columns:
+        fmt["Weight (troy oz)"] = "{:,.2f}"
+    if "Price Paid ($)" in display_df.columns:
+        fmt["Price Paid ($)"] = "${:,.2f}"
+    if "Modifier ($)" in display_df.columns:
+        fmt["Modifier ($)"] = "${:,.2f}"
+    if "Item Melt Value ($)" in display_df.columns:
+        fmt["Item Melt Value ($)"] = "${:,.2f}"
+
+    def _highlight_totals(row):
+        try:
+            is_total = str(row.get("Description", "")).upper() == "TOTAL"
+        except Exception:
+            is_total = False
+        if is_total:
+            return ["font-weight: bold; background-color: #f5f7fa;" for _ in row.index]
+        return ["" for _ in row.index]
+
+    styled = display_df.style.format(fmt).apply(_highlight_totals, axis=1)
+    # Use st.write for a pandas Styler to avoid type warnings and ensure proper rendering
+    st.write(styled)
 
     # --- 8. SAVE BUTTON ---
     # Prepare CSV for download: canonicalize column name, then export
