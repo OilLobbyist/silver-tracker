@@ -78,6 +78,9 @@ if not edited_df.empty and edited_df["Weight (oz)"].sum() > 0:
         wire_miles = total_oz * 1.5
         st.write(f"🧵 **The Wire Fact:** Your silver could be drawn into a wire **{wire_miles:,.1f} miles** long!")
         st.write(f"🔋 **Industrial Use:** You have enough silver for roughly **{int(total_oz * 1.5)} solar panels**.")
+        # Approximate how many 12 fl oz soda cans (by mass of liquid) equal the silver stack
+        cans = (total_oz * 31.1) / 355
+        st.write(f"🥤 **Soda Can Equivalent:** Your stack weighs about **{cans:,.1f} standard 12oz cans**.")
     with f2:
         # Silver density is roughly 10.5 g/cm3
         volume = (total_oz * 31.1) / 10.5
