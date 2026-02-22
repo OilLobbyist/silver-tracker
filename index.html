@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Silver Tracker</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Silver Tracker (Client-only)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  </head>
+  <body class="bg-light">
+    <nav class="navbar navbar-dark bg-dark mb-3">
+      <div class="container-fluid">
+        <span class="navbar-brand mb-0 h1">Silver Tracker — Client-only</span>
+        <span class="text-white small">Privacy-first: data never leaves your browser</span>
+      </div>
+    </nav>
+
+    <main class="container">
+      <div class="row">
+        <div class="col-md-8">
+          <h4>Inventory</h4>
+          <div class="mb-2">
+            <input id="fileInput" type="file" accept="text/csv" class="form-control" />
+          </div>
+          <div class="mb-2">
+            <button id="downloadBtn" class="btn btn-primary">Download/Save CSV</button>
+            <button id="clearBtn" class="btn btn-outline-danger">Clear Table</button>
+          </div>
+
+          <div class="table-responsive">
+            <table id="inventoryTable" class="table table-sm table-bordered">
+              <thead class="table-secondary">
+                <tr>
+                  <th>Description</th>
+                  <th>Weight (troy oz)</th>
+                  <th>Date Acquired</th>
+                  <th>Price Paid ($)</th>
+                  <th>Modifier ($)</th>
+                  <th>Item Melt Value ($)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="mb-3">
+            <button id="addRowBtn" class="btn btn-success">Add Row</button>
+          </div>
+        </div>
+
+        <div class="col-md-4">
+          <h4>Spot Price</h4>
+          <div class="mb-2">
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input id="spotInput" type="number" step="0.01" class="form-control" />
+            </div>
+          </div>
+          <div class="mb-2">
+            <input id="spotRange" type="range" min="0" max="500" step="0.01" class="form-range" />
+          </div>
+          <div class="mb-3">
+            <button id="fetchSpotBtn" class="btn btn-outline-primary">Fetch Spot (try auto)</button>
+            <span id="fetchStatus" class="ms-2"></span>
+          </div>
+
+          <h5>Stack Summary</h5>
+          <ul class="list-group mb-3">
+            <li class="list-group-item">Total Weight (troy oz): <span id="totalWeight">0</span></li>
+            <li class="list-group-item">Current Melt Value: $<span id="totalMelt">0.00</span></li>
+            <li class="list-group-item">Profit/Loss: $<span id="pl">0.00</span></li>
+          </ul>
+
+          <div class="alert alert-secondary small">
+            <strong>Privacy:</strong> Your data is stored only in your browser (sessionStorage). Closing the tab clears it. Use Download to persist locally.
+          </div>
+
+          <div class="mb-3">
+            <h6>Quick Add</h6>
+            <input id="qaDesc" class="form-control mb-1" placeholder="Description" />
+            <input id="qaWeight" class="form-control mb-1" placeholder="Weight (troy oz)" type="number" step="0.0001" />
+            <input id="qaPricePaid" class="form-control mb-1" placeholder="Price Paid ($)" type="number" step="0.01" />
+            <input id="qaModifier" class="form-control mb-1" placeholder="Modifier ($)" type="number" step="0.01" />
+            <button id="qaAdd" class="btn btn-sm btn-outline-success">Add Item</button>
+          </div>
+        </div>
+      </div>
+
+      <hr />
+      <div class="row">
+        <div class="col-md-12">
+          <h6>Privacy & Liability</h6>
+          <p class="small">This app runs entirely in your browser. The author is not responsible for data loss, unauthorized access, or financial outcomes. Use at your own risk. Back up your CSVs locally.</p>
+        </div>
+      </div>
+    </main>
+
+    <script>
+    // Constants
+    const STORAGE_KEY = 'silver_inventory_v1';
+
+    // Utilities
+    function csvToRows(csv) {
+      return Papa.parse(csv, {header: true, skipEmptyLines: true}).data;
+    }
+    function rowsToCsv(rows) {
+      return Papa.unparse(rows);
+    }
+
+    function renderTable(rows) {
+      const tbody = document.querySelector('#inventoryTable tbody');
+      tbody.innerHTML = '';
+      rows.forEach((r, i) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td contenteditable='true' data-col='Description'>${r['Description']||''}</td>
+          <td contenteditable='true' data-col='Weight (troy oz)'>${r['Weight (troy oz)']||''}</td>
+          <td contenteditable='true' data-col='Date Acquired'>${r['Date Acquired']||''}</td>
+          <td contenteditable='true' data-col='Price Paid ($)'>${r['Price Paid ($)']||''}</td>
+          <td contenteditable='true' data-col='Modifier ($)'>${r['Modifier ($)']||''}</td>
+          <td data-col='Item Melt Value ($)'></td>
+        `;
+        tbody.appendChild(tr);
+      });
+      attachTableListeners();
+      recalcAll();
+    }
+
+    function readTableRows() {
+      const tbody = document.querySelector('#inventoryTable tbody');
+      const rows = [];
+      tbody.querySelectorAll('tr').forEach(tr => {
+        const obj = {};
+        tr.querySelectorAll('[data-col]').forEach(td => {
+          obj[td.getAttribute('data-col')] = td.innerText.trim();
+        });
+        rows.push(obj);
+      });
+      return rows;
+    }
+
+    // Save/load using either sessionStorage (default) or localStorage (opt-in)
+    function saveToStorage(rows) {
+      const csv = rowsToCsv(rows);
+      try {
+        if (document.getElementById('persistToggle').checked) {
+          localStorage.setItem(STORAGE_KEY, csv);
+          sessionStorage.removeItem(STORAGE_KEY);
+        } else {
+          sessionStorage.setItem(STORAGE_KEY, csv);
+          // do not remove local copy unless user explicitly clears
+        }
+      } catch(e){}
+    }
+
+    function loadFromStorage() {
+      try {
+        const useLocal = document.getElementById('persistToggle').checked;
+        if (useLocal) {
+          const v = localStorage.getItem(STORAGE_KEY);
+          if (!v) return [];
+          return csvToRows(v);
+        } else {
+          const v = sessionStorage.getItem(STORAGE_KEY);
+          if (!v) return [];
+          return csvToRows(v);
+        }
+      } catch(e){ return []; }
+    }
+
+    function recalcAll() {
+      const spot = parseFloat(document.getElementById('spotInput').value) || 0;
+      const rows = readTableRows();
+      let totalWeight = 0;
+      let totalMelt = 0;
+      let totalPaid = 0;
+      const tbody = document.querySelector('#inventoryTable tbody');
+      tbody.querySelectorAll('tr').forEach((tr,i)=>{
+        const weight = parseFloat((tr.querySelector('[data-col="Weight (troy oz)"]').innerText||0))||0;
+        const mod = parseFloat((tr.querySelector('[data-col="Modifier ($)"]').innerText||0))||0;
+        const paid = parseFloat((tr.querySelector('[data-col="Price Paid ($)"]').innerText||0))||0;
+        const melt = (weight * spot) + mod;
+        tr.querySelector('[data-col="Item Melt Value ($)"]').innerText = melt ? melt.toFixed(2) : '';
+        totalWeight += weight;
+        totalMelt += melt;
+        totalPaid += paid;
+      });
+      document.getElementById('totalWeight').innerText = totalWeight.toFixed(2);
+      document.getElementById('totalMelt').innerText = totalMelt.toFixed(2);
+      document.getElementById('pl').innerText = (totalMelt - totalPaid).toFixed(2);
+      // Save to chosen storage
+      saveToStorage(rows);
+    }
+
+    function attachTableListeners(){
+      document.querySelectorAll('#inventoryTable td[contenteditable=true]').forEach(td=>{
+        td.oninput = () => { recalcAll(); };
+      });
+    }
+
+    // CSV load
+    document.getElementById('fileInput').addEventListener('change', (e)=>{
+      const f = e.target.files[0];
+      if (!f) return;
+      Papa.parse(f, {header:true, skipEmptyLines:true, complete: (res)=>{
+        renderTable(res.data);
+      }});
+    });
+
+    // Download
+    document.getElementById('downloadBtn').addEventListener('click', ()=>{
+      const rows = readTableRows();
+      const csv = rowsToCsv(rows);
+      const blob = new Blob([csv], {type: 'text/csv'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `silver_stack_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    // Clear
+    document.getElementById('clearBtn').addEventListener('click', ()=>{
+      if (!confirm('Clear table? This will remove all rows for this session.')) return;
+      renderTable([]);
+      sessionStorage.removeItem(STORAGE_KEY);
+    });
+
+    // Add row
+    document.getElementById('addRowBtn').addEventListener('click', ()=>{
+      const rows = readTableRows();
+      rows.push({'Description':'','Weight (troy oz)':'','Date Acquired':'','Price Paid ($)':'','Modifier ($)':''});
+      renderTable(rows);
+    });
+
+    // Quick Add
+    document.getElementById('qaAdd').addEventListener('click', ()=>{
+      const desc = document.getElementById('qaDesc').value;
+      const weight = document.getElementById('qaWeight').value;
+      const pricePaid = document.getElementById('qaPricePaid').value;
+      const modifier = document.getElementById('qaModifier').value;
+      const rows = readTableRows();
+      rows.push({'Description':desc,'Weight (troy oz)':weight,'Date Acquired':'','Price Paid ($)':pricePaid,'Modifier ($)':modifier});
+      renderTable(rows);
+      document.getElementById('qaDesc').value=''; document.getElementById('qaWeight').value=''; document.getElementById('qaPricePaid').value=''; document.getElementById('qaModifier').value='';
+    });
+
+    // Spot price controls
+    const spotInput = document.getElementById('spotInput');
+    const spotRange = document.getElementById('spotRange');
+    spotInput.addEventListener('input', ()=>{ spotRange.value = spotInput.value; recalcAll(); });
+    spotRange.addEventListener('input', ()=>{ spotInput.value = spotRange.value; recalcAll(); });
+
+    // Try to fetch spot price from Yahoo Finance (SI=F futures) or SLV ETF
+    async function tryFetchSpot(){
+      const status = document.getElementById('fetchStatus');
+      status.innerText = '...';
+      const endpoints = [
+        'https://query1.finance.yahoo.com/v7/finance/quote?symbols=SI=F',
+        'https://query1.finance.yahoo.com/v7/finance/quote?symbols=SLV'
+      ];
+      for (const url of endpoints){
+        try{
+          const res = await fetch(url);
+          if (!res.ok) throw new Error('bad');
+          const j = await res.json();
+          const quote = j?.quoteResponse?.result?.[0];
+          const p = quote?.regularMarketPrice || quote?.regularMarketPreviousClose || null;
+          if (p != null){
+            spotInput.value = parseFloat(p).toFixed(2);
+            spotRange.value = spotInput.value;
+            recalcAll();
+            status.innerText = 'fetched';
+            return;
+          }
+        }catch(e){
+          // ignore and try next
+        }
+      }
+      status.innerText = 'failed — enter manually';
+    }
+
+    document.getElementById('fetchSpotBtn').addEventListener('click', tryFetchSpot);
+
+    // Add a localStorage opt-in toggle UI element and behavior
+    const controls = document.createElement('div');
+    controls.className = 'mb-2';
+    controls.innerHTML = `
+      <div class='form-check'>
+        <input class='form-check-input' type='checkbox' value='' id='persistToggle'>
+        <label class='form-check-label small' for='persistToggle'>Persist across sessions (LocalStorage) — opt-in</label>
+      </div>
+    `;
+    document.querySelector('.col-md-4').insertBefore(controls, document.querySelector('.col-md-4').children[1]);
+
+    // Initialize toggle based on existing localStorage setting
+    window.addEventListener('load', ()=>{
+      const toggle = document.getElementById('persistToggle');
+      // If a localStorage copy exists, default toggle to checked
+      try {
+        if (localStorage.getItem(STORAGE_KEY)) toggle.checked = true;
+      } catch(e){}
+      const rows = loadFromStorage();
+      renderTable(rows.length ? rows : []);
+      // try auto-fetch once
+      tryFetchSpot();
+      // initialize spot input if empty
+      if (!spotInput.value) { spotInput.value = '25.00'; spotRange.value = '25.00'; }
+      // Save toggle changes by re-saving current data into chosen storage
+      toggle.addEventListener('change', ()=>{ saveToStorage(readTableRows()); });
+    });
+    </script>
+  </body>
+</html>

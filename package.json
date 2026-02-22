@@ -1,0 +1,24 @@
+{
+  "name": "silver-tracker-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve": "vite preview --port 5000"
+  },
+  "dependencies": {
+    "papaparse": "^5.4.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "@mui/material": "^5.14.0",
+    "@emotion/react": "^11.12.0",
+    "@emotion/styled": "^11.12.0"
+    ,"@mui/icons-material": "^5.14.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "@vitejs/plugin-react": "^4.0.0"
+  }
+}
